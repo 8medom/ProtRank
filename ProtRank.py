@@ -58,8 +58,9 @@ def load_data(file_name, separator = '\t', ignore_cols = [], index_col = 0, comm
     the condition labels read from the input file.
     """
     raw_data = pd.read_csv(file_name, comment = comments, delimiter = separator, index_col = index_col)
-    if len(ignore_cols) != 0:         # remove the columns that should be ignored
+    if len(ignore_cols) != 0:           # remove the columns that should be ignored
         raw_data.drop(columns = ignore_cols, inplace = True)
+    raw_data.fillna(0, inplace = True)  # replace NaNs with zeros
     print('loaded input data with {} proteins that have been measured under {} different conditions'.format(raw_data.shape[0], raw_data.shape[1]))
     return raw_data
 
@@ -141,7 +142,7 @@ def data_stats(data, what_to_compare = None, ignore_missed = True):
         print('  (the smaller the fraction, the smaller the problem with irregular zeros in the data)')
 
 
-def rank_proteins(data, what_to_compare, description = 'ProtRank_analysis', prior_count = 1, num_bootstrap_realizations = 100, FDR_threshold = 0.1, rel_rank_ZV = 0.1, ignore_missed = True):
+def rank_proteins(data, what_to_compare, description = 'ProtRank_analysis', prior_count = 1, num_bootstrap_realizations = 100, FDR_threshold = 0.1, rel_rank_ZV = 0.1, ignore_missed = True, save_pvals = False):
     """
     Rank proteins by their differential abundance.
 
@@ -159,6 +160,10 @@ def rank_proteins(data, what_to_compare, description = 'ProtRank_analysis', prio
     The number of bootstrap realizations that are used to estimate the proteins' false detection rate (FDR). The default is 100.
     FDR_threshold : float, optional
     False detection rate below which proteins are reported as differentially abundant. The default is 0.1.
+    ignore_missed: boolean, optional
+    Whether to ignore the rows without positive counts. The default is True.
+    save_pvals: boolean, optional
+    Whether to save bootstrap estimates of differential expression p-values in the output file. The default is False.
     """
     num_groups = len(what_to_compare)
     num_comparisons = sum([len(group) for group in what_to_compare])
@@ -184,7 +189,7 @@ def rank_proteins(data, what_to_compare, description = 'ProtRank_analysis', prio
 
     seed(0)                                                         # analysis of bootstrap data
     data_flat = analyzed_data.flatten()                             # auxiliary 1D array to create the bootstrapped data
-    bootstrap_scores, bootstrap_scores2, num_better = np.zeros(analyzed_data.shape[0]), np.zeros(analyzed_data.shape[0]), np.zeros(analyzed_data.shape[0])
+    bootstrap_scores, bootstrap_scores2, num_better, pvals = np.zeros(analyzed_data.shape[0]), np.zeros(analyzed_data.shape[0]), np.zeros(analyzed_data.shape[0]), np.zeros(analyzed_data.shape[0])
     print('{} bootstrap realizations:'.format(num_bootstrap_realizations), end=' ')
     for n in range(num_bootstrap_realizations):
         print(n + 1, end=' ')
@@ -197,14 +202,16 @@ def rank_proteins(data, what_to_compare, description = 'ProtRank_analysis', prio
         boot_score, signs_of_boot_score = get_best_scores(bootstrapped_data, prior_count, comparisons_subset, which_group, rel_rank_ZV)
         for g in range(analyzed_data.shape[0]):
             num_better[g] += np.where(boot_score >= sorted_real_score[g])[0].size
+            if boot_score[g] > sorted_real_score[g]: pvals[g] += 1
         sorted_score = -np.sort(-boot_score)
         bootstrap_scores += sorted_score
         bootstrap_scores2 += np.power(sorted_score, 2)
     bootstrap_scores /= num_bootstrap_realizations
     bootstrap_scores2 /= num_bootstrap_realizations
     num_better /= num_bootstrap_realizations
+    pvals /= num_bootstrap_realizations
     #~save_bootstrap_profile(analyzed_data, bootstrap_scores, bootstrap_scores2, description)
-    significant_proteins = save_results(analyzed_data_pd, best_score, signs_of_best_score, num_better, what_to_compare, description, num_bootstrap_realizations, FDR_threshold)
+    significant_proteins = save_results(analyzed_data_pd, best_score, signs_of_best_score, num_better, pvals, what_to_compare, description, num_bootstrap_realizations, FDR_threshold, save_pvals)
     return significant_proteins
 
 
@@ -360,7 +367,7 @@ def get_best_scores(data, prior_count, comparisons, which_group, rel_rank_ZV):
     return best_score, signs_of_best_score
 
 
-def save_results(data, score_vector, signs_of_best_score, num_better, what_to_compare, description, num_bootstrap_realizations, FDR_threshold):
+def save_results(data, score_vector, signs_of_best_score, num_better, pvals, what_to_compare, description, num_bootstrap_realizations, FDR_threshold, save_pvals):
     """
     Internal function: Saves the list of all proteins ranked by the their aggregate rank score together with their FDR estimates.
     """
@@ -373,7 +380,8 @@ def save_results(data, score_vector, signs_of_best_score, num_better, what_to_co
         o.write(' & '.join('{} vs. {}'.format(pair[0], pair[1]) for pair in what_to_compare[n]))
         o.write('\n')
     o.write('# FDR values computed using {} bootstrap realizations of the data\n'.format(num_bootstrap_realizations))
-    o.write('# rank\trow\trank score\tFDR\tsigns in groups\n')
+    if save_pvals: o.write('# rank\trow\trank score\tp-val\tFDR\tsigns in groups\n')
+    else: o.write('# rank\trow\trank score\tFDR\tsigns in groups\n')
 
     FDR = 0
     significant_proteins = []
@@ -392,10 +400,11 @@ def save_results(data, score_vector, signs_of_best_score, num_better, what_to_co
         if FDR <= FDR_threshold:
             chosen_rows.append(row)
             significant_proteins.append(data.index[row])
-        if score_vector[row] < 1e-2:
-            o.write('{}\t{}\t{:.4e}\t{:.5f}\t{}\n'.format(n + 1, data.index[row], score_vector[row], FDR, ''.join(sign_strings)))
-        else:
-            o.write('{}\t{}\t{:.6f}\t{:.5f}\t{}\n'.format(n + 1, data.index[row], score_vector[row], FDR, ''.join(sign_strings)))
+        o.write('{}\t{}\t'.format(n + 1, data.index[row]))
+        if score_vector[row] < 1e-2: o.write('{:.4e}\t'.format(score_vector[row]))
+        else: o.write('{:.6f}\t'.format(score_vector[row]))
+        if save_pvals: o.write('{}\t'.format(pvals[n]))
+        o.write('{:.5f}\t{}\n'.format(FDR, ''.join(sign_strings)))
     o.close()
 
     o = open('prs-significant-{}.dat'.format(description), 'w')
