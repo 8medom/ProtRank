@@ -433,16 +433,20 @@ def save_results(data, score_vector, signs_of_best_score, num_better, pvals, wha
         for g, group in enumerate(what_to_compare):
             lfc_vals[g] = 0
             for pair in group:
-                if data[pair[1]].iloc[row] > 0 and data[pair[0]].iloc[row] > 0:
+                v1, v0 = data[pair[1]].iloc[row], data[pair[0]].iloc[row]
+                if v1.size > 1:           # this happens when a column is used more than once
+                    v1 = v1.values[0]
+                if v0.size > 1:
+                    v0 = v0.values[0]
+                if v1 > 0 and v0 > 0:     # lfc value can be computed
                     lfc_vals[g] += lfc_sorted[n, pos]
-                elif data[pair[1]].iloc[row] > 0 and data[pair[0]].iloc[row] == 0:
+                elif v1 > 0 and v0 == 0:  # use median of lfc values computed for similarly-ranked proteins
                     lfc_vals[g] += median_abs_lfc
-                elif data[pair[1]].iloc[row] == 0 and data[pair[0]].iloc[row] > 0:
+                elif v1 == 0 and v0 > 0:  # use negative of the median of lfc values computed for similarly-ranked proteins
                     lfc_vals[g] += -median_abs_lfc
                 pos += 1
             lfc_vals[g] /= len(group)
         lfc_string = ' '.join(['{:.2f}'.format(x) for x in lfc_vals])
-        #raw_input()
         sign_strings = []
         for c in range(signs_of_best_score[row,:].size):
             if signs_of_best_score[row, c] == 0: sign_strings.append('+')
@@ -565,16 +569,13 @@ def plot_lfc(data, what_to_compare, list_of_rows, description, group_labels = No
     ax.set_xlim([0, n_cols + (n_groups - 1) * group_separation - 0.2])
     ax.set_ylim([0, n_proteins - 0.2])
     if group_labels != None:
-        if len(what_to_compare) == 1:                                   # there is just one group of comparisons and one string
-            ax.text(0.5 * len(what_to_compare[0]) - 0.1, n_proteins - 0.1, group_labels, ha = 'center', va = 'bottom', fontsize = group_title_font_size)
-        else:                                                           # the are multiple groups of comparisons, group_labels has to follow them
-            if len(group_labels) != len(what_to_compare):
-                print('warning: length of the list of provided group labels ({}) differs from the number of groups ({}) - no group headers will be displayed'.format(len(group_labels), len(what_to_compare)))
-            else:
-                x = 0
-                for g in range(len(what_to_compare)):
-                    ax.text(x + 0.5 * len(what_to_compare[g]) - 0.1, n_proteins - 0.1, group_labels[g], ha = 'center', va = 'bottom', fontsize = group_title_font_size)
-                    x += len(what_to_compare[g]) + group_separation
+        if len(group_labels) != len(what_to_compare):
+            print('warning: length of the list of provided group labels ({}) differs from the number of groups ({}) - no group headers will be displayed'.format(len(group_labels), len(what_to_compare)))
+        else:
+            x = 0
+            for g in range(len(what_to_compare)):
+                ax.text(x + 0.5 * len(what_to_compare[g]) - 0.1, n_proteins - 0.1, group_labels[g], ha = 'center', va = 'bottom', fontsize = group_title_font_size)
+                x += len(what_to_compare[g]) + group_separation
     if fig_title != None:
         ax.text(0.5 * x - 0.1 - 0.5 * group_separation, n_proteins + 0.5, fig_title, ha = 'center', va = 'bottom', fontsize = title_font_size)
     ax.axis('off')
